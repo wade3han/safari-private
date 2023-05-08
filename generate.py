@@ -3,6 +3,7 @@ import argparse
 import torch
 from transformers import GPT2Tokenizer
 
+from src.models.sequence.h3 import H3
 from src.models.sequence.long_conv_lm import ConvLMHeadModel
 
 parser = argparse.ArgumentParser(description='H3 text generation')
@@ -34,7 +35,9 @@ if args.rotary_emb_dim is None:
     attn_cfg = dict(num_heads=args.nheads)
 else:
     attn_cfg = dict(num_heads=args.nheads, rotary_emb_dim=args.rotary_emb_dim)
+layer = H3(d_model=d_model, d_state=64, head_dim=1, mode='diag', measure='diag-lin')
 model = ConvLMHeadModel(d_model, n_layer=n_layer, d_inner=4 * d_model, vocab_size=len(tokenizer),
+                        layer=layer,
                         # ssm_cfg=ssm_cfg,
                         attn_layer_idx=attn_layer_idx, attn_cfg=attn_cfg,
                         pad_vocab_size_multiple=8).to(device=device)
