@@ -35,7 +35,14 @@ if args.rotary_emb_dim is None:
     attn_cfg = dict(num_heads=args.nheads)
 else:
     attn_cfg = dict(num_heads=args.nheads, rotary_emb_dim=args.rotary_emb_dim)
-layer = H3(d_model=d_model, d_state=64, head_dim=1, mode='diag', measure='diag-lin')
+# layer = H3(d_model=d_model, d_state=64, head_dim=1, mode='diag', measure='diag-lin')
+layer = {
+    '_name_': 'h3',
+    'd_state': 64,
+    'head_dim': 1,
+    'mode': 'diag',
+    'measure': 'diag-lin',
+}
 model = ConvLMHeadModel(d_model, n_layer=n_layer, d_inner=4 * d_model, vocab_size=len(tokenizer),
                         layer=layer,
                         # ssm_cfg=ssm_cfg,
