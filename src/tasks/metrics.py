@@ -48,10 +48,10 @@ def binary_accuracy(logits, y):
     return torch.eq(logits.squeeze(-1) >= 0, y).float().mean()
 
 
-def cross_entropy(logits, y):
+def cross_entropy(logits, y, ignore_index=-100):
     logits = logits.view(-1, logits.shape[-1])
     y = y.view(-1)
-    return F.cross_entropy(logits, y)
+    return F.cross_entropy(logits, y, ignore_index=ignore_index)
 
 
 def soft_cross_entropy(logits, y, label_smoothing=0.0):

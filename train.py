@@ -29,11 +29,14 @@ log = src.utils.train.get_logger(__name__)
 
 # Turn on TensorFloat32 (speeds up large model training substantially)
 import torch.backends
+
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 OmegaConf.register_new_resolver('eval', eval)
 OmegaConf.register_new_resolver('div_up', lambda x, y: (x + y - 1) // y)
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Lots of annoying hacks to get WandbLogger to continuously retry on failure
 class DummyExperiment:
@@ -175,6 +178,19 @@ class SequenceLightningModule(pl.LightningModule):
                 if hasattr(module, name):
                     getattr(module, name)(**kwargs)
 
+        # load pretrained weights
+        if self.hparams.train.pretrained_model_path:
+            print(f'Loading pretrained model from {self.hparams.train.pretrained_model_path}')
+            # @seungjuh (TODO) there are some hard-coded rules here.
+            state_dict = torch.load(self.hparams.train.pretrained_model_path,
+                                    map_location=torch.device('cpu'))['state_dict']
+            state_dict.pop('train_metrics.num-tokens.count')
+            state_dict.pop('val_metrics.num-tokens.count')
+            state_dict.pop('test_metrics.num-tokens.count')
+            state_dict['model.backbone.ln_f.weight'] = state_dict.pop('model.backbone.ln_0.weight')
+            state_dict['model.backbone.ln_f.bias'] = state_dict.pop('model.backbone.ln_0.bias')
+            self.load_state_dict(state_dict)
+
         # Instantiate the task
         self.task = utils.instantiate(
             tasks.registry, self.hparams.task, dataset=self.dataset, model=self.model
@@ -199,6 +215,8 @@ class SequenceLightningModule(pl.LightningModule):
         self.train_torchmetrics = self.task.train_torchmetrics
         self.val_torchmetrics = self.task.val_torchmetrics
         self.test_torchmetrics = self.task.test_torchmetrics
+        if hasattr(self.task, 'inference_torchmetrics'):
+            self.inference_torchmetrics = self.task.inference_torchmetrics
 
     def load_state_dict(self, state_dict, strict=True):
         if self.hparams.train.pretrained_model_state_hook['_name_'] is not None:
@@ -306,7 +324,7 @@ class SequenceLightningModule(pl.LightningModule):
         return self.task.forward(batch, self.encoder, self.model, self.decoder, self._state)
 
     def step(self, x_t):
-        x_t, *_ = self.encoder(x_t) # Potential edge case for encoders that expect (B, L, H)?
+        x_t, *_ = self.encoder(x_t)  # Potential edge case for encoders that expect (B, L, H)?
         x_t, state = self.model.step(x_t, state=self._state)
         self._state = state
         # x_t = x_t[:, None, ...] # Dummy length
@@ -334,7 +352,7 @@ class SequenceLightningModule(pl.LightningModule):
         # Calculate torchmetrics
         torchmetrics = getattr(self, f'{prefix}_torchmetrics')
         torchmetrics(x, y, loss=loss)
-        
+
         log_on_step = 'eval' in self.hparams and self.hparams.eval.get('log_on_step', False) and prefix == 'train'
 
         self.log_dict(
@@ -459,7 +477,50 @@ class SequenceLightningModule(pl.LightningModule):
 
         return loss
 
+    def _inference_step(self, batch, batch_idx):
+        # Calculate torchmetrics
+        self._process_state(batch, batch_idx, train=False)
+
+        torchmetrics = getattr(self, f'inference_torchmetrics')
+        x, y, *z = batch
+
+        # FIXME  - this is a hack to get the input text
+        INSTRUCT = ' \n What is the summary of the given text? \n '
+        input_texts = self.dataset.tokenizer.batch_decode(x, skip_special_tokens=True)
+        input_texts = [text.split(INSTRUCT)[0] + INSTRUCT for text in input_texts]
+
+        target_texts = self.dataset.tokenizer.batch_decode(y, skip_special_tokens=True)
+        target_texts = [text.replace('<|endoftext|>', '').strip() for text in target_texts]
+
+        input_ids = self.dataset.tokenizer(input_texts)['input_ids']
+
+        output_texts = []
+        for input_id in input_ids:
+            # FIXME  - hparams
+            max_length = len(input_id) + 1024
+            input_id = torch.Tensor(input_id).to(x.device).long().unsqueeze(0)
+
+            output_ids = self.model.generate(input_ids=input_id, max_length=max_length,
+                                             return_dict_in_generate=False, output_scores=False,
+                                             timing=False, top_p=0.9, top_k=50,
+                                             eos_token_id=self.dataset.tokenizer.eos_token_id)
+            output_ids = output_ids[:, len(input_id):]
+            output_texts.append(self.dataset.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0])
+        torchmetrics(output_texts, target_texts)
+
+        # log the whole dict, otherwise lightning takes the mean to reduce it
+        # https://pytorch-lightning.readthedocs.io/en/stable/visualize/logging_advanced.html#enable-metrics-for-distributed-training
+        self.log_dict(
+            torchmetrics,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            add_dataloader_idx=False,
+            sync_dist=True,
+        )
+
     def test_step(self, batch, batch_idx, dataloader_idx=0):
+        self._inference_step(batch, batch_idx)
         return self._shared_step(
             batch, batch_idx, prefix=self.test_loader_names[dataloader_idx]
         )
@@ -520,7 +581,8 @@ class SequenceLightningModule(pl.LightningModule):
 
             # Update lr for each layer
             for layer_id, group in layer_wise_groups.items():
-                group['lr'] = self.hparams.optimizer.lr * (self.hparams.train.layer_decay.decay ** (num_max_layers - layer_id))
+                group['lr'] = self.hparams.optimizer.lr * (
+                        self.hparams.train.layer_decay.decay ** (num_max_layers - layer_id))
 
             # Reset the torch optimizer's param groups
             optimizer.param_groups = []
@@ -560,37 +622,39 @@ class SequenceLightningModule(pl.LightningModule):
         else:
             return [prefix], [loaders]
 
-    def _eval_dataloaders(self):
-        # Return all val + test loaders
-        val_loaders = self.dataset.val_dataloader(**self.hparams.loader)
-        test_loaders = self.dataset.test_dataloader(**self.hparams.loader)
-        val_loader_names, val_loaders = self._eval_dataloaders_names(val_loaders, "val")
-        test_loader_names, test_loaders = self._eval_dataloaders_names(
-            test_loaders, "test"
-        )
+    def _eval_dataloaders(self, split):
+        if split == 'val':
+            val_loaders = self.dataset.val_dataloader(**self.hparams.loader)
+            val_loader_names, val_loaders = self._eval_dataloaders_names(val_loaders, "val")
 
-        # Duplicate datasets for ema
-        if self.hparams.train.ema > 0.0:
-            val_loader_names += [name + "/ema" for name in val_loader_names]
-            val_loaders = val_loaders + val_loaders
-            test_loader_names += [name + "/ema" for name in test_loader_names]
-            test_loaders = test_loaders + test_loaders
+            # Duplicate datasets for ema
+            if self.hparams.train.ema > 0.0:
+                val_loader_names += [name + "/ema" for name in val_loader_names]
+                val_loaders = val_loaders + val_loaders
 
-        # adding option to only have val loader at eval (eg if test is duplicate)
-        if self.hparams.train.get("remove_test_loader_in_eval", None) is not None:
             return val_loader_names, val_loaders
-        # default behavior is to add test loaders in eval
-        else:
-            return val_loader_names + test_loader_names, val_loaders + test_loaders
+
+        elif split == 'test':
+            test_loaders = self.dataset.test_dataloader(**self.hparams.loader)
+            test_loader_names, test_loaders = self._eval_dataloaders_names(
+                test_loaders, "test"
+            )
+
+            # Duplicate datasets for ema
+            if self.hparams.train.ema > 0.0:
+                test_loader_names += [name + "/ema" for name in test_loader_names]
+                test_loaders = test_loaders + test_loaders
+
+            return test_loader_names, test_loaders
 
     def val_dataloader(self):
-        val_loader_names, val_loaders = self._eval_dataloaders()
+        val_loader_names, val_loaders = self._eval_dataloaders('val')
         self.val_loader_names = val_loader_names
         return val_loaders
 
     def test_dataloader(self):
-        test_loader_names, test_loaders = self._eval_dataloaders()
-        self.test_loader_names = ["final/" + name for name in test_loader_names]
+        test_loader_names, test_loaders = self._eval_dataloaders('test')
+        self.test_loader_names = test_loader_names
         return test_loaders
 
 
@@ -637,7 +701,8 @@ def create_trainer(config, **kwargs):
         config.trainer.strategy = dict(
             _target_='pytorch_lightning.strategies.DDPStrategy',
             find_unused_parameters=False,
-            gradient_as_bucket_view=True,  # https://pytorch-lightning.readthedocs.io/en/stable/advanced/advanced_gpu.html#ddp-optimizations
+            gradient_as_bucket_view=True,
+            # https://pytorch-lightning.readthedocs.io/en/stable/advanced/advanced_gpu.html#ddp-optimizations
         )
 
     # Init lightning trainer
@@ -654,6 +719,9 @@ def train(config):
     trainer = create_trainer(config)
     model = SequenceLightningModule(config)
 
+    # FIXME
+    trainer.test(model)
+
     # Run initial validation epoch (useful for debugging, finetuning)
     if config.train.validate_at_start:
         print("Running validation before training")
@@ -667,11 +735,8 @@ def train(config):
         trainer.test(model)
 
 
-
-
 @hydra.main(config_path="configs", config_name="config.yaml")
 def main(config: OmegaConf):
-
     # Process config:
     # - register evaluation resolver
     # - filter out keys used only for interpolation

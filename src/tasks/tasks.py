@@ -1,22 +1,21 @@
-from typing import Optional, List, Tuple
-import math
-import functools
+from typing import List
 import collections
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from einops import rearrange
-from omegaconf import ListConfig
+import torchmetrics as tm
+from torchmetrics import MetricCollection
+
+from src.dataloaders.booksum import MASK_IDX
 from src.models.nn.components import ReversibleInstanceNorm1dInput, ReversibleInstanceNorm1dOutput, \
     TSNormalization, TSInverseNormalization
-
 from src.models.nn.adaptive_softmax import AdaptiveEmbedding, ProjectedAdaptiveLogSoftmax
 import src.tasks.metrics as M
 from src.tasks.torchmetrics import torchmetric_fns as tm_mine
 import src.models.nn.utils as U
-import torchmetrics as tm
 from src.utils.config import to_list, instantiate
-from torchmetrics import MetricCollection
+
 
 class BaseTask:
     """ Abstract class that takes care of:
@@ -362,10 +361,62 @@ class ImageNetTask(BaseTask):
             self.loss_val = hydra.utils.instantiate(kwargs.get('loss_val'))
 
 
+class SummarizationTask(BaseTask):
+    def __init__(self, dataset=None, model=None, loss=None, loss_val=None, metrics=None, torchmetrics=None):
+        super().__init__(dataset, model, loss, loss_val, metrics, torchmetrics)
+        # overide the loss function to use the correct mask
+        self.loss = instantiate(M.output_metric_fns, loss, ignore_index=MASK_IDX, partial=True)
+        self.loss = U.discard_kwargs(self.loss)
+
+        if loss_val is not None:
+            self.loss_val = instantiate(M.output_metric_fns, loss_val, ignore_index=MASK_IDX, partial=True)
+            self.loss_val = U.discard_kwargs(self.loss_val)
+
+        torchmetrics_dict = self._init_torchmetrics()
+        torchmetrics_dict['perplexity_ignore_mask'] = tm_mine['perplexity'](ignore_index=MASK_IDX).to('cuda')
+        torchmetrics = MetricCollection(torchmetrics_dict)
+        self.train_torchmetrics = torchmetrics.clone(prefix='train/')
+        self.val_torchmetrics = torchmetrics.clone(prefix='val/')
+        self.test_torchmetrics = torchmetrics.clone(prefix='test/')
+
+        # add Rouge for test_torchmetrics
+        self.inference_torchmetrics = MetricCollection({'rouge1_fmeasure': tm_mine['rouge1_fmeasure'](),
+                                                        'rouge2_fmeasure': tm_mine['rouge2_fmeasure'](),
+                                                        'rougeL_fmeasure': tm_mine['rougeL_fmeasure'](),
+                                                        'rouge1_precision': tm_mine['rouge1_precision'](),
+                                                        'rouge2_precision': tm_mine['rouge2_precision'](),
+                                                        'rougeL_precision': tm_mine['rougeL_precision'](),
+                                                        'rouge1_recall': tm_mine['rouge1_recall'](),
+                                                        'rouge2_recall': tm_mine['rouge2_recall'](),
+                                                        'rougeL_recall': tm_mine['rougeL_recall'](),
+                                                        })
+
+    def forward(self, batch, encoder, model, decoder, _state):
+        """Passes a batch through the encoder, backbone, and decoder"""
+        # z holds arguments such as sequence length
+        x, y, *z = batch # z holds extra dataloader info such as resolution
+        if len(z) == 0:
+            z = {}
+        else:
+            assert len(z) == 1 and isinstance(z[0], dict), "Dataloader must return dictionary of extra arguments"
+            z = z[0]
+        x, w = encoder(x, **z) # w can model-specific constructions such as key_padding_mask for transformers or state for RNNs
+        x, state = model(x, **w, state=_state)
+        self._state = state
+        x, w = decoder(x, state=state, **z)
+
+        x = x.logits
+        x = rearrange(x, '... C -> (...) C')
+        y = rearrange(y, '... -> (...)')
+
+        return x, y, w
+
+
 registry = {
     'base': BaseTask,
     'lm': LMTask,
     'imagenet': ImageNetTask,
     'forecasting': ForecastingTask,
     'video': VideoTask,
+    'summarization': SummarizationTask,
 }

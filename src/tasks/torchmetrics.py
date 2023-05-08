@@ -2,12 +2,20 @@
 # But we compute the perplexity correctly: exp(average(nll)), not average(exp(nll))
 # Also adapted from https://github.com/Lightning-AI/metrics/blob/master/src/torchmetrics/text/perplexity.py
 # But we pass in the loss to avoid recomputation
+import functools
+from typing import Any, Dict, Optional, Callable, Literal, Union, Tuple, Sequence, List
 
-from typing import Any, Dict, Optional
-
+import nltk
 import torch
-import torch.nn.functional as F
 from torch import Tensor
+from torchmetrics.utilities.imports import _NLTK_AVAILABLE
+from torchmetrics.functional.text.rouge import (
+    ALLOWED_ACCUMULATE_VALUES,
+    ALLOWED_ROUGE_KEYS,
+    _rouge_score_compute,
+    _rouge_score_update,
+)
+
 from torchmetrics import Metric
 
 try:
@@ -43,13 +51,13 @@ class Perplexity(Metric):
     total_log_probs: Tensor
     count: Tensor
 
-    def __init__(self, **kwargs: Dict[str, Any]):
+    def __init__(self, ignore_index=-100, **kwargs: Dict[str, Any]):
         super().__init__(**kwargs)
         self.add_state("total_log_probs", default=torch.tensor(0.0, dtype=torch.float64),
                        dist_reduce_fx="sum")
         self.add_state("count", default=torch.tensor(0, dtype=torch.int64), dist_reduce_fx="sum")
 
-        self.loss_fn = CrossEntropyLoss()
+        self.loss_fn = CrossEntropyLoss(ignore_index=ignore_index)
 
     def update(self, preds: Tensor, target: Tensor, loss: Optional[Tensor] = None) -> None:  # type: ignore
         """Compute and store intermediate statistics for Perplexity.
@@ -114,7 +122,106 @@ class NumTokens(Metric):
         self.update(*args, **kwargs)
         return self.compute()
 
+
+class ROUGEScore(Metric):
+    is_differentiable: bool = False
+    higher_is_better: bool = True
+    full_state_update: bool = True
+
+    def __init__(
+        self,
+        rouge_key: str,
+        use_stemmer: bool = False,
+        normalizer: Callable[[str], str] = None,
+        tokenizer: Callable[[str], Sequence[str]] = None,
+        accumulate: Literal["avg", "best"] = "best",
+        **kwargs: Any,
+    ):
+        super().__init__(**kwargs)
+        rouge_keys = ("rouge1", "rouge2", "rougeL", "rougeLsum")
+        self.rouge_keys = rouge_keys
+        self.rouge_keys_values = [ALLOWED_ROUGE_KEYS[key] for key in rouge_keys]
+
+        self.rouge_key = rouge_key
+        self.stemmer = nltk.stem.porter.PorterStemmer() if use_stemmer else None
+        self.normalizer = normalizer
+        self.tokenizer = tokenizer
+        self.accumulate = accumulate
+
+        # self.add_state(f"{rouge_key}", [], dist_reduce_fx=None)
+        # Adding stated dynamically to prevent IndexError during sync function as some lists can be empty.
+        for rouge_key in self.rouge_keys:
+            for score in ["fmeasure", "precision", "recall"]:
+                self.add_state(f"{rouge_key}_{score}", [], dist_reduce_fx=None)
+
+    def update(
+        self, preds: Union[str, Sequence[str]], target: Union[str, Sequence[str], Sequence[Sequence[str]]]
+    ) -> None:
+        """Update state with predictions and targets."""
+        if isinstance(target, list) and all(isinstance(tgt, str) for tgt in target):
+            target = [target] if isinstance(preds, str) else [[tgt] for tgt in target]
+
+        if isinstance(preds, str):
+            preds = [preds]
+
+        if isinstance(target, str):
+            target = [[target]]
+
+        output: Dict[Union[int, str], List[Dict[str, Tensor]]] = _rouge_score_update(
+            preds,
+            target,
+            self.rouge_keys_values,
+            stemmer=self.stemmer,
+            normalizer=self.normalizer,
+            tokenizer=self.tokenizer,
+            accumulate=self.accumulate,
+        )
+        # rouge_key, score = self.rouge_key.split("_")
+        # output_key = rouge_key[len('rouge'):]
+        # try:
+        #     output_key = int(output_key)
+        # except ValueError:
+        #     pass
+        # metrics = output[output_key]
+        # for metric in metrics:
+        #     value = metric[score]
+        #     getattr(self, self.rouge_key).append(value.to(self.device))
+        for rouge_key, metrics in output.items():
+            for metric in metrics:
+                for tp, value in metric.items():
+                    getattr(self, f"rouge{rouge_key}_{tp}").append(value.to(self.device))
+
+    def compute(self) -> Dict[str, Tensor]:
+        """Calculate (Aggregate and provide confidence intervals) ROUGE score."""
+        update_output = {}
+        for rouge_key in self.rouge_keys_values:
+            for tp in ["fmeasure", "precision", "recall"]:
+                update_output[f"rouge{rouge_key}_{tp}"] = getattr(self, f"rouge{rouge_key}_{tp}")
+
+        return _rouge_score_compute(update_output)[self.rouge_key]
+
+    def __hash__(self) -> int:
+        # override to hash list objects.
+        # this is a bug in the upstream pytorch release.
+        hash_vals = [self.__class__.__name__]
+        for key in self._defaults:
+            value = getattr(self, key)
+            if isinstance(value, list):
+                value = tuple(value)
+            hash_vals.append(value)
+
+        return hash(tuple(hash_vals))
+
 torchmetric_fns = {
     "perplexity": Perplexity,
     "num_tokens": NumTokens,
+    "rouge1_fmeasure": functools.partial(ROUGEScore, rouge_key="rouge1_fmeasure"),
+    "rouge1_precision": functools.partial(ROUGEScore, rouge_key="rouge1_precision"),
+    "rouge1_recall": functools.partial(ROUGEScore, rouge_key="rouge1_recall"),
+    "rouge2_fmeasure": functools.partial(ROUGEScore, rouge_key="rouge2_fmeasure"),
+    "rouge2_precision": functools.partial(ROUGEScore, rouge_key="rouge2_precision"),
+    "rouge2_recall": functools.partial(ROUGEScore, rouge_key="rouge2_recall"),
+    "rougeL_fmeasure": functools.partial(ROUGEScore, rouge_key="rougeL_fmeasure"),
+    "rougeL_precision": functools.partial(ROUGEScore, rouge_key="rougeL_precision"),
+    "rougeL_recall": functools.partial(ROUGEScore, rouge_key="rougeL_recall"),
 }

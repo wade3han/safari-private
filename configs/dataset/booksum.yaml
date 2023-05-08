@@ -1,0 +1,13 @@
+_name_: kmfoda/booksum
+dataset_name: kmfoda/booksum
+dataset_config_name: null
+tokenizer_name: gpt2
+cache_dir: ${oc.env:DATA_PATH}/booksum/cache
+max_length: 8192
+add_eos: True
+batch_size: 4  # per GPU
+batch_size_eval: ${eval:${.batch_size} * 2}
+num_workers: 64  # For preprocessing only
+use_shmem: False
+shuffle: True
+pin_memory: True
