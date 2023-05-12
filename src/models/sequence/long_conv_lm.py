@@ -299,8 +299,6 @@ class ConvLMHeadModel(nn.Module, GenerationMixin):
             key = re.sub(r'^s4seq.encoder.', 'backbone.', key)
             key = re.sub(r'^embedding.', 'backbone.embeddings.word_embeddings.', key)
             key = re.sub(r'^backbone.norm', 'backbone.ln_0', key)
-            key = re.sub(r'^backbone.layers.(\d+).mixer.output_linear.',
-                         r'backbone.layers.\1.mixer.out_proj.', key)
             return key
         state_dict = OrderedDict((key_mapping_backbone(k), v) for k, v in state_dict.items())
         # Remapping from our checkpoints that used a different ordering of layers in the block
@@ -326,23 +324,6 @@ class ConvLMHeadModel(nn.Module, GenerationMixin):
             ln_bias = state_dict.pop('backbone.ln_0.bias')
             state_dict[f'backbone.layers.0.norm1.weight'] = ln_weight
             state_dict[f'backbone.layers.0.norm1.bias'] = ln_bias
-        # Previously we have separate projection matrices for q, k, v, now we stack them
-        if 'backbone.layers.0.mixer.q_proj.weight' in state_dict:
-            n_layers = len(self.backbone.layers)
-            for l in range(n_layers):
-                if f'backbone.layers.{l}.mixer.q_proj.weight' in state_dict:
-                    Wq = state_dict.pop(f'backbone.layers.{l}.mixer.q_proj.weight')
-                    Wk = state_dict.pop(f'backbone.layers.{l}.mixer.k_proj.weight')
-                    Wv = state_dict.pop(f'backbone.layers.{l}.mixer.v_proj.weight')
-                    bq = state_dict.pop(f'backbone.layers.{l}.mixer.q_proj.bias')
-                    bk = state_dict.pop(f'backbone.layers.{l}.mixer.k_proj.bias')
-                    bv = state_dict.pop(f'backbone.layers.{l}.mixer.v_proj.bias')
-                    state_dict[f'backbone.layers.{l}.mixer.Wqkv.weight'] = torch.cat(
-                        [Wq, Wk, Wv], dim=0
-                    )
-                    state_dict[f'backbone.layers.{l}.mixer.Wqkv.bias'] = torch.cat(
-                        [bq, bk, bv], dim=0
-                    )
         return super().load_state_dict(state_dict, strict=strict)
 
 
