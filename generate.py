@@ -52,8 +52,6 @@ if args.ckpt is not None:
     if 'pytorch-lightning_version' in state_dict:
         state_dict = {k[len('model.'):]: v for k, v in state_dict['state_dict'].items()
                       if k.startswith('model.')}
-    state_dict['backbone.ln_f.weight'] = state_dict.pop('backbone.ln_0.weight')
-    state_dict['backbone.ln_f.bias'] = state_dict.pop('backbone.ln_0.bias')
     model.load_state_dict(state_dict)
 model.eval()
 # Only cast the nn.Linear parameters to dtype, the SSM params stay in fp32
