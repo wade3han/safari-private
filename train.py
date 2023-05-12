@@ -181,14 +181,10 @@ class SequenceLightningModule(pl.LightningModule):
         # load pretrained weights
         if self.hparams.train.pretrained_model_path:
             print(f'Loading pretrained model from {self.hparams.train.pretrained_model_path}')
-            # @seungjuh (TODO) there are some hard-coded rules here.
-            state_dict = torch.load(self.hparams.train.pretrained_model_path,
-                                    map_location=torch.device('cpu'))['state_dict']
-            state_dict.pop('train_metrics.num-tokens.count')
-            state_dict.pop('val_metrics.num-tokens.count')
-            state_dict.pop('test_metrics.num-tokens.count')
-            # state_dict['model.backbone.ln_f.weight'] = state_dict.pop('model.backbone.ln_0.weight')
-            # state_dict['model.backbone.ln_f.bias'] = state_dict.pop('model.backbone.ln_0.bias')
+            state_dict = torch.load(self.hparams.train.pretrained_model_path, map_location='cpu')
+            if 'pytorch-lightning_version' in state_dict:
+                state_dict = {k[len('model.'):]: v for k, v in state_dict['state_dict'].items()
+                              if k.startswith('model.')}
             self.model.load_state_dict(state_dict)
 
         # Instantiate the task
