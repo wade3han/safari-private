@@ -187,9 +187,9 @@ class SequenceLightningModule(pl.LightningModule):
             state_dict.pop('train_metrics.num-tokens.count')
             state_dict.pop('val_metrics.num-tokens.count')
             state_dict.pop('test_metrics.num-tokens.count')
-            state_dict['model.backbone.ln_f.weight'] = state_dict.pop('model.backbone.ln_0.weight')
-            state_dict['model.backbone.ln_f.bias'] = state_dict.pop('model.backbone.ln_0.bias')
-            self.load_state_dict(state_dict)
+            # state_dict['model.backbone.ln_f.weight'] = state_dict.pop('model.backbone.ln_0.weight')
+            # state_dict['model.backbone.ln_f.bias'] = state_dict.pop('model.backbone.ln_0.bias')
+            self.model.load_state_dict(state_dict)
 
         # Instantiate the task
         self.task = utils.instantiate(
