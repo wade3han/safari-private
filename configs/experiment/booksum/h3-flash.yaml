@@ -29,7 +29,7 @@ train:
 
 callbacks:
   early_stopping:
-    monitor: val_loss
+    monitor: val/loss
     min_delta: 0.0
     patience: 3
     mode: min
