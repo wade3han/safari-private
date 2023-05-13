@@ -61,7 +61,7 @@ for name, module in model.named_modules():
 
 # prompt = args.prompt
 # load prompt from booksum test set
-dataset = load_dataset('booksum', 'test')
+dataset = load_dataset('kmfoda/booksum', 'test')
 prompt = dataset['chapter'][0] + ' \n What is the summary of the given text? \n '
 
 input_ids = torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device=device)
