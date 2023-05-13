@@ -4,5 +4,5 @@ model:
   n_layer: 24
 
 loader:
-  batch_size: 4
+  batch_size: 2
 
