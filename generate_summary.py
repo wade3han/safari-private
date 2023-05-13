@@ -74,10 +74,8 @@ output_ids = model.generate(input_ids=input_ids, max_length=max_length,
                             timing=False, top_p=args.top_p, top_k=args.top_k,
                             eos_token_id=tokenizer.eos_token_id)
 
-true_output_ids = output_ids[0, input_ids.shape[1]:]
-
 print('[Output summary]')
-print(tokenizer.batch_decode(true_output_ids)[0])
+print(tokenizer.batch_decode(output_ids)[0][len(prompt):])
 
 print('[Original summary]')
 print(dataset_test['summary_text'][0])
