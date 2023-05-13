@@ -715,6 +715,9 @@ def train(config):
     trainer = create_trainer(config)
     model = SequenceLightningModule(config)
 
+    # FIXME
+    trainer.test(model)
+
     # Run initial validation epoch (useful for debugging, finetuning)
     if config.train.validate_at_start:
         print("Running validation before training")
