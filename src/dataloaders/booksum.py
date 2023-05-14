@@ -9,7 +9,7 @@ from torch import nn
 from datasets import DatasetDict, load_dataset
 from src.dataloaders.base import default_data_path, SequenceDataset
 
-MASK_IDX = 50256  # FIXME (@seungjuh) refer to ignore_index in cross_entropy in torch
+MASK_IDX = 50257  # FIXME (@seungjuh) refer to ignore_index in cross_entropy in torch
 
 
 class BookSum(SequenceDataset):
