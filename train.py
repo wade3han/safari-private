@@ -493,7 +493,7 @@ class SequenceLightningModule(pl.LightningModule):
         output_texts = []
         for input_id in input_ids:
             # FIXME  - hparams
-            max_length = len(input_id) + 1024
+            max_length = len(input_id) + 512
             input_id = torch.Tensor(input_id).to(x.device).long().unsqueeze(0)
 
             output_ids = self.model.generate(input_ids=input_id, max_length=max_length,
