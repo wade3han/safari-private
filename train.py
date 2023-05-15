@@ -374,6 +374,8 @@ class SequenceLightningModule(pl.LightningModule):
 
     def on_train_epoch_start(self):
         # Reset training torchmetrics
+        import ipdb;
+        ipdb.set_trace();
         self.task._reset_torchmetrics("train")
 
     def training_epoch_end(self, outputs):
