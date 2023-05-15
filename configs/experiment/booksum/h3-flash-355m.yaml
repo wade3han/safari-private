@@ -32,5 +32,8 @@ callbacks:
   early_stopping:
     monitor: val/loss
     min_delta: 0.0
-    patience: 1
+    patience: 3
     mode: min
+
+trainer:
+  max_epochs: 5
