@@ -91,7 +91,7 @@ class BookSum(SequenceDataset):
             input_ids = tokenizer(example['chapter'] + INSTRUCT)['input_ids']
             target_ids = tokenizer(example['summary_text'])['input_ids']
             masks = [MASK_IDX] * len(input_ids)
-            return masks[1:] + target_ids
+            return masks[1:] + target_ids if not self.append_eos else masks[1:] + target_ids[:-1] + [tokenizer.eos_token_id]
 
         # input_ids = tokenize_maybe_eos(sources)['input_ids']
 
