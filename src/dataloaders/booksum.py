@@ -81,15 +81,21 @@ class BookSum(SequenceDataset):
 
         INSTRUCT = ' \n What is the summary of the given text? \n '
 
+        def normalize(text):
+            text = text.replace("\n", " ")
+            text = text.replace("\t", " ")
+            text = ' '.join(text.split())
+            return text
+
         def get_source(tokenizer, example):
-            input_ids = tokenizer(example['chapter'] + INSTRUCT)['input_ids']
-            target_ids = tokenizer(example['summary_text'])['input_ids']
+            input_ids = tokenizer(normalize(example['chapter']) + INSTRUCT)['input_ids']
+            target_ids = tokenizer(normalize(example['summary_text']))['input_ids']
 
             return input_ids + target_ids[:-1]
 
         def get_target(tokenizer, example):
-            input_ids = tokenizer(example['chapter'] + INSTRUCT)['input_ids']
-            target_ids = tokenizer(example['summary_text'])['input_ids']
+            input_ids = tokenizer(normalize(example['chapter']) + INSTRUCT)['input_ids']
+            target_ids = tokenizer(normalize(example['summary_text']))['input_ids']
             masks = [MASK_IDX] * len(input_ids)
             return masks[1:] + target_ids if not self.append_eos else masks[1:] + target_ids[:-1] + [tokenizer.eos_token_id]
 
