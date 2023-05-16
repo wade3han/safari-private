@@ -501,7 +501,9 @@ class SequenceLightningModule(pl.LightningModule):
                                              timing=False, top_p=0.9, top_k=50,
                                              eos_token_id=self.dataset.tokenizer.eos_token_id)
             output_ids = output_ids[:, len(input_id):]
-            output_texts.append(self.dataset.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0])
+            output_text = self.dataset.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+            output_text = output_text.replace('<|endoftext|>', '').strip()
+            output_texts.append(output_text)
         torchmetrics(output_texts, target_texts)
 
         # log the whole dict, otherwise lightning takes the mean to reduce it
