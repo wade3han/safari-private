@@ -1,9 +1,11 @@
 import argparse
 
 import torch
+
 from transformers import GPT2Tokenizer
 
-from src.models.sequence.long_conv_lm import ConvLMHeadModel
+from src.models.sequence.ssm_seq import SSMLMHeadModel
+
 
 parser = argparse.ArgumentParser(description='H3 text generation')
 parser.add_argument('--dmodel', type=int, default=768)
@@ -26,32 +28,20 @@ tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 torch.random.manual_seed(0)
 d_model = args.dmodel
 n_layer = args.nlayer
-# ssm_cfg = dict(mode='diag', measure='diag-lin')
+ssm_cfg = dict(mode='diag', measure='diag-lin')
 attn_layer_idx = args.attn_layer_idx
 if args.rotary_emb_dim is None:
     attn_cfg = dict(num_heads=args.nheads)
 else:
     attn_cfg = dict(num_heads=args.nheads, rotary_emb_dim=args.rotary_emb_dim)
-# layer = H3(d_model=d_model, d_state=64, head_dim=1, mode='diag', measure='diag-lin')
-layer = {
-    '_name_': 'h3',
-    'd_state': 64,
-    'head_dim': 1,
-    'mode': 'diag',
-    'measure': 'diag-lin',
-}
-model = ConvLMHeadModel(d_model, n_layer=n_layer, d_inner=4 * d_model, vocab_size=len(tokenizer),
-                        layer=layer,
-                        # ssm_cfg=ssm_cfg,
-                        attn_layer_idx=attn_layer_idx, attn_cfg=attn_cfg,
-                        pad_vocab_size_multiple=8).to(device=device)
+model = SSMLMHeadModel(d_model, n_layer=n_layer, d_inner=4 * d_model, vocab_size=len(tokenizer),
+                       ssm_cfg=ssm_cfg, attn_layer_idx=attn_layer_idx, attn_cfg=attn_cfg,
+                       pad_vocab_size_multiple=8).to(device=device)
 if args.ckpt is not None:
     state_dict = torch.load(args.ckpt, map_location=device)
     if 'pytorch-lightning_version' in state_dict:
         state_dict = {k[len('model.'):]: v for k, v in state_dict['state_dict'].items()
                       if k.startswith('model.')}
-    # state_dict['backbone.ln_f.weight'] = state_dict.pop('backbone.ln_0.weight')
-    # state_dict['backbone.ln_f.bias'] = state_dict.pop('backbone.ln_0.bias')
     model.load_state_dict(state_dict, strict=False)
 model.eval()
 # Only cast the nn.Linear parameters to dtype, the SSM params stay in fp32
