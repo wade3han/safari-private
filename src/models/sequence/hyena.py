@@ -14,7 +14,7 @@ except ImportError:
     fftconv_func = None
 
 try:
-    from flash_attention.flash_attn.ops.fused_dense import FusedDense
+    from flash_attn.ops.fused_dense import FusedDense
 except ImportError:
     FusedDense = None
 

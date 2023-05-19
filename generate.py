@@ -6,20 +6,22 @@ from transformers import GPT2Tokenizer
 from src.models.sequence.long_conv_lm import ConvLMHeadModel
 
 parser = argparse.ArgumentParser(description='H3 text generation')
-parser.add_argument('--dmodel', type=int, default=768)
-parser.add_argument('--nlayer', type=int, default=12)
-parser.add_argument('--attn-layer-idx', nargs='+', type=int, default=[8,16])
-parser.add_argument('--rotary_emb_dim', type=int, default=None, help='For rotary embeddings, set to 64. Default is None.')
+parser.add_argument('--dmodel', type=int, default=2048)
+parser.add_argument('--nlayer', type=int, default=24)
+parser.add_argument('--attn-layer-idx', nargs='+', type=int, default=[8, 16])
+parser.add_argument('--rotary_emb_dim', type=int, default=None,
+                    help='For rotary embeddings, set to 64. Default is None.')
 parser.add_argument('--nheads', type=int, default=16)
 parser.add_argument('--ckpt', type=str, default=None)
 parser.add_argument('--genlen', type=int, default=128)
 parser.add_argument('--top_p', type=float, default=0.9)
 parser.add_argument('--top_k', type=int, default=50)
-parser.add_argument('--prompt', type=str, default='Hungry Hungry Hippos: Towards Language Modeling With State Space Models is a new language model that')
+parser.add_argument('--prompt', type=str,
+                    default='Hungry Hungry Hippos: Towards Language Modeling With State Space Models is a new language model that')
 args = parser.parse_args()
 
-device = 'cpu'
-dtype = torch.float32
+device = 'cuda'
+dtype = torch.float16
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
 # set seed
@@ -50,9 +52,7 @@ if args.ckpt is not None:
     if 'pytorch-lightning_version' in state_dict:
         state_dict = {k[len('model.'):]: v for k, v in state_dict['state_dict'].items()
                       if k.startswith('model.')}
-    # state_dict['backbone.ln_f.weight'] = state_dict.pop('backbone.ln_0.weight')
-    # state_dict['backbone.ln_f.bias'] = state_dict.pop('backbone.ln_0.bias')
-    model.load_state_dict(state_dict, strict=False)
+    model.load_state_dict(state_dict)
 model.eval()
 # Only cast the nn.Linear parameters to dtype, the SSM params stay in fp32
 # Pytorch lacks support for complex32 (i.e. complex<float16>) and complex<bfloat16>.
@@ -66,8 +66,8 @@ input_ids = torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device=device
 max_length = input_ids.shape[1] + args.genlen
 
 output_ids = model.generate(input_ids=input_ids, max_length=max_length,
-                       return_dict_in_generate=False, output_scores=False, 
-                       timing=False, top_p=args.top_p, top_k=args.top_k, 
-                       eos_token_id=tokenizer.eos_token_id)
+                            return_dict_in_generate=False, output_scores=False,
+                            timing=False, top_p=args.top_p, top_k=args.top_k,
+                            eos_token_id=tokenizer.eos_token_id)
 
 print(tokenizer.batch_decode(output_ids)[0])

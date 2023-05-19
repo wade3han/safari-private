@@ -16,20 +16,20 @@ from transformers.models.gpt2.configuration_gpt2 import GPT2Config
 
 from einops import rearrange
 
-from flash_attention.flash_attn.modules.mha import MHA, ParallelMHA
-from flash_attention.flash_attn.modules.mlp import Mlp, FusedMLP, ParallelFusedMLP
-from flash_attention.flash_attn.modules.block import Block
-from flash_attention.flash_attn.modules.embedding import GPT2Embeddings, ParallelGPT2Embeddings
-from flash_attention.flash_attn.utils.generation import GenerationMixin
-from flash_attention.flash_attn.utils.distributed import sync_shared_params, all_gather_raw
+from flash_attn.modules.mha import MHA, ParallelMHA
+from flash_attn.modules.mlp import Mlp, FusedMLP, ParallelFusedMLP
+from flash_attn.modules.block import Block
+from flash_attn.modules.embedding import GPT2Embeddings, ParallelGPT2Embeddings
+from flash_attn.utils.generation import GenerationMixin
+from flash_attn.utils.distributed import sync_shared_params, all_gather_raw
 
 try:
-    from flash_attention.flash_attn.ops.fused_dense import ColumnParallelLinear
+    from flash_attn.ops.fused_dense import ColumnParallelLinear
 except ImportError:
     ColumnParallelLinear = None
 
 try:
-    from flash_attention.flash_attn.ops.layer_norm import dropout_add_layer_norm
+    from flash_attn.ops.layer_norm import dropout_add_layer_norm
 except ImportError:
     dropout_add_layer_norm = None
 
@@ -287,11 +287,11 @@ class ConvLMHeadModel(nn.Module, GenerationMixin):
                                       inference_params=inference_params)
         lm_logits = self.lm_head(hidden_states)
         # During inference, we want the full logit for sampling
-        if isinstance(self.lm_head, type(ColumnParallelLinear)) and inference_params is not None:
+        if isinstance(self.lm_head, ColumnParallelLinear) and inference_params is not None:
             lm_logits, _ = all_gather_raw(lm_logits, self.lm_head.process_group)
             lm_logits = rearrange(lm_logits, '(n b) s d -> b s (n d)', b=hidden_states.shape[0])
         CausalLMOutput = namedtuple('CausalLMOutput', ['logits'])
-        return CausalLMOutput(logits=lm_logits)
+        return CausalLMOutput(logits=lm_logits), None
 
     def load_state_dict(self, state_dict, strict=True):
         # Remapping from our checkpoints that used different names
@@ -299,14 +299,8 @@ class ConvLMHeadModel(nn.Module, GenerationMixin):
             key = re.sub(r'^s4seq.encoder.', 'backbone.', key)
             key = re.sub(r'^embedding.', 'backbone.embeddings.word_embeddings.', key)
             key = re.sub(r'^backbone.norm', 'backbone.ln_0', key)
-            # key = re.sub(r'^backbone.layers.(\d+).mixer.output_linear.',
-            #              r'backbone.layers.\1.mixer.out_proj.', key)
-            # print(key)
             return key
         state_dict = OrderedDict((key_mapping_backbone(k), v) for k, v in state_dict.items())
-        with open("our_layer.txt", 'w') as wr:
-            for k in state_dict.keys():
-                wr.write(f"{k}\n")
         # Remapping from our checkpoints that used a different ordering of layers in the block
         # Previous: Mixer / MLP -> Dropout -> Add -> LN
         # Current: Dropout -> Add -> LN -> Attn / MLP
@@ -330,23 +324,6 @@ class ConvLMHeadModel(nn.Module, GenerationMixin):
             ln_bias = state_dict.pop('backbone.ln_0.bias')
             state_dict[f'backbone.layers.0.norm1.weight'] = ln_weight
             state_dict[f'backbone.layers.0.norm1.bias'] = ln_bias
-        # Previously we have separate projection matrices for q, k, v, now we stack them
-        # if 'backbone.layers.0.mixer.q_proj.weight' in state_dict:
-        #     n_layers = len(self.backbone.layers)
-        #     for l in range(n_layers):
-        #         if f'backbone.layers.{l}.mixer.q_proj.weight' in state_dict:
-        #             Wq = state_dict.pop(f'backbone.layers.{l}.mixer.q_proj.weight')
-        #             Wk = state_dict.pop(f'backbone.layers.{l}.mixer.k_proj.weight')
-        #             Wv = state_dict.pop(f'backbone.layers.{l}.mixer.v_proj.weight')
-        #             bq = state_dict.pop(f'backbone.layers.{l}.mixer.q_proj.bias')
-        #             bk = state_dict.pop(f'backbone.layers.{l}.mixer.k_proj.bias')
-        #             bv = state_dict.pop(f'backbone.layers.{l}.mixer.v_proj.bias')
-        #             state_dict[f'backbone.layers.{l}.mixer.Wqkv.weight'] = torch.cat(
-        #                 [Wq, Wk, Wv], dim=0
-        #             )
-        #             state_dict[f'backbone.layers.{l}.mixer.Wqkv.bias'] = torch.cat(
-        #                 [bq, bk, bv], dim=0
-        #             )
         return super().load_state_dict(state_dict, strict=strict)
 
 
