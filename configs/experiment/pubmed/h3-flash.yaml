@@ -30,5 +30,8 @@ train:
 early_stopping:
   monitor: val_loss
   min_delta: 0.0
-  patience: 3
+  patience: 1
   mode: min
+
+trainer:
+  max_epochs: 2
