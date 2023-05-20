@@ -9,7 +9,7 @@ from torch import nn
 from datasets import DatasetDict, load_dataset
 from src.dataloaders.base import default_data_path, SequenceDataset
 
-MASK_IDX = 50256  # EOS Token
+MASK_IDX = 50255  # EOS Token
 
 
 class ScientificPapers(SequenceDataset):
@@ -81,17 +81,23 @@ class ScientificPapers(SequenceDataset):
         
         INSTRUCT = ' \n What is the summary of the given text? \n '
 
+        def normalize(text):
+            text = text.replace("\n", " ")
+            text = text.replace("\t", " ")
+            text = ' '.join(text.split())
+            return text
+
         def get_source(tokenizer, example):
-            input_ids = tokenizer(example['article'] + INSTRUCT)['input_ids']
-            target_ids = tokenizer(example['abstract'])['input_ids']
+            input_ids = tokenizer(normalize(example['article'] + INSTRUCT))['input_ids']
+            target_ids = tokenizer(normalize(example['abstract']))['input_ids']
 
             return input_ids + target_ids[:-1]
 
         def get_target(tokenizer, example):
-            input_ids = tokenizer(example['article'] + INSTRUCT)['input_ids']
-            target_ids = tokenizer(example['abstract'])['input_ids']
+            input_ids = tokenizer(normalize(example['article'] + INSTRUCT))['input_ids']
+            target_ids = tokenizer(normalize(example['abstract']))['input_ids']
             masks = [MASK_IDX] * len(input_ids)
-            return masks[1:] + target_ids
+            return masks[1:] + target_ids if not self.append_eos else masks[1:] + target_ids[:-1] + [tokenizer.eos_token_id]
 
         # input_ids = tokenize_maybe_eos(sources)['input_ids']
 
