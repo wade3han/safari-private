@@ -27,9 +27,11 @@ model:
 train:
   pretrained_model_path: /net/nfs.cirrascale/mosaic/seungjuh/H3-125M/model.pt
 
-callbacks:
-  early_stopping:
-    monitor: val/loss
-    min_delta: 0.0
-    patience: 3
-    mode: min
+early_stopping:
+  monitor: val_loss
+  min_delta: 0.0
+  patience: 1
+  mode: min
+
+trainer:
+  max_epochs: 2
