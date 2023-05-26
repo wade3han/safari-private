@@ -1,0 +1,39 @@
+# @package _global_
+defaults:
+  - /experiment/arxiv/base.yaml
+  - /experiment/arxiv/355m
+  - /model/layer: h3
+
+model:
+  _name_: lm
+  d_model: 1024
+  n_layer: 24
+  d_inner: ${eval:4 * ${.d_model}}
+  vocab_size: 50257
+  resid_dropout: 0.0
+  embed_dropout: 0.1
+  layer:
+    use_fast_fftconv: False
+  attn_layer_idx: [8, 16]
+  attn_cfg:
+    num_heads: 16
+    use_flash_attn: True
+    fused_bias_fc: False
+    dropout: 0.1
+  fused_mlp: False
+  fused_dropout_add_ln: False
+  residual_in_fp32: True
+  pad_vocab_size_multiple: 8
+
+train:
+  pretrained_model_path: /net/nfs.cirrascale/mosaic/seungjuh/H3-355M/model.pt
+
+callbacks:
+  early_stopping:
+    monitor: val/loss
+    min_delta: 0.0
+    patience: 1
+    mode: min
+
+trainer:
+  max_epochs: 2
