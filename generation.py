@@ -53,7 +53,7 @@ def run_model(model, input_ids, inference_params, batch_size, beam_width, vocab_
     # reshape
     next_token_scores = next_token_scores.view(batch_size, beam_width * vocab_size)
     next_token_scores, next_tokens = torch.topk(next_token_scores,
-                                                2 * beam_width,
+                                                4 * beam_width,
                                                 dim=1,
                                                 largest=True,
                                                 sorted=True)
