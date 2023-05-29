@@ -228,14 +228,14 @@ class SequenceLightningModule(pl.LightningModule):
     def _check_config(self):
         assert self.hparams.train.state.mode in [None, "none", "null", "reset", "bptt", "tbptt"]
         assert (
-            (n := self.hparams.train.state.n_context) is None
-            or isinstance(n, int)
-            and n >= 0
+                (n := self.hparams.train.state.n_context) is None
+                or isinstance(n, int)
+                and n >= 0
         )
         assert (
-            (n := self.hparams.train.state.n_context_eval) is None
-            or isinstance(n, int)
-            and n >= 0
+                (n := self.hparams.train.state.n_context_eval) is None
+                or isinstance(n, int)
+                and n >= 0
         )
 
     def _initialize_state(self):
@@ -456,8 +456,8 @@ class SequenceLightningModule(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         ema = (
-            self.val_loader_names[dataloader_idx].endswith("/ema")
-            and self.optimizers().optimizer.stepped
+                self.val_loader_names[dataloader_idx].endswith("/ema")
+                and self.optimizers().optimizer.stepped
         )  # There's a bit of an annoying edge case with the first (0-th) epoch; it has to be excluded due to the initial sanity check
         if ema:
             self.optimizers().swap_ema()
@@ -707,23 +707,13 @@ def create_trainer(config, **kwargs):
     return trainer
 
 
-def train(config):
+def test(config):
     if config.train.seed is not None:
         pl.seed_everything(config.train.seed, workers=True)
     trainer = create_trainer(config)
     model = SequenceLightningModule(config)
 
-    # Run initial validation epoch (useful for debugging, finetuning)
-    if config.train.validate_at_start:
-        print("Running validation before training")
-        trainer.validate(model)
-
-    if config.train.ckpt is not None:
-        trainer.fit(model, ckpt_path=config.train.ckpt)
-    else:
-        trainer.fit(model)
-    if config.train.test:
-        trainer.test(model)
+    trainer.test(model)
 
 
 @hydra.main(config_path="configs", config_name="config.yaml")
@@ -737,7 +727,7 @@ def main(config: OmegaConf):
     # Pretty print config using Rich library
     utils.train.print_config(config, resolve=True)
 
-    train(config)
+    test(config)
 
 
 if __name__ == "__main__":

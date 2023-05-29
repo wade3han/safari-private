@@ -8,6 +8,9 @@ from typing import Optional, Union, Sequence, Callable
 import torch
 from torch import Tensor
 from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput
+from transformers import BeamSearchScorer
+from transformers import GPT2Tokenizer
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
 
 @dataclass
@@ -86,21 +89,23 @@ def run_model(model, input_ids, inference_params, batch_size, beam_width, vocab_
     else:
         vocab_size = logits.shape[-1]
 
-    next_tokens = sample(logits, top_k=50, top_p=0.9, temperature=1.0)
-    import ipdb;
-    ipdb.set_trace();
+    # next_tokens = []
+    # for i in range(2 * beam_width):
+    #     next_tokens.append(sample(logits.reshape(batch_size, -1), top_k=50, top_p=0.9, temperature=1.0))
+    # next_tokens = torch.stack(next_tokens, dim=1)  # [batch_size, num_beams]
+    # next_token_scores = torch.zeros_like(next_tokens)
 
+    next_token_scores = torch.nn.functional.log_softmax(logits, dim=-1)  # [B * beam_width, vocab_size]
+    next_token_scores = next_token_scores + beam_scores.view(-1, 1).expand_as(next_token_scores)
 
-    # next_token_scores = torch.nn.functional.log_softmax(logits, dim=-1)  # [B * beam_width, vocab_size]
-    # next_token_scores = next_token_scores + beam_scores.view(-1, 1).expand_as(next_token_scores)
-    #
-    # # reshape
-    # next_token_scores = next_token_scores.view(batch_size, beam_width * vocab_size)
-    # next_token_scores, next_tokens = torch.topk(next_token_scores,
-    #                                             4 * beam_width,
-    #                                             dim=1,
-    #                                             largest=True,
-    #                                             sorted=True)
+    # reshape
+    next_token_scores = next_token_scores.view(batch_size, beam_width * vocab_size)
+    next_token_scores, next_tokens = torch.topk(next_token_scores,
+                                                4 * beam_width,
+                                                dim=1,
+                                                largest=True,
+                                                sorted=True)
+
     next_indices = torch.div(next_tokens, vocab_size, rounding_mode='floor')
     next_tokens = next_tokens % vocab_size
 
@@ -123,100 +128,200 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
         sequences: (batch, max_length)
         scores: tuples of (batch, vocab_size)
     """
-    top_k = 5
-
     # beam search parameters
-    beam_width = 5
+    num_beams = 5
+    num_beam_groups = 1
+    batch_size, seqlen_og = input_ids.shape
+    device = input_ids.device
 
-    # from transformers import GPT2Tokenizer
-    # tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    beam_scorer = BeamSearchScorer(
+        batch_size=batch_size,
+        num_beams=num_beams,
+        device=device,
+        num_beam_groups=num_beam_groups,
+    )
+
+    batch_size = len(beam_scorer._beam_hyps)
+    num_beams = beam_scorer.num_beams
+    num_beam_groups = beam_scorer.num_beam_groups
+    num_sub_beams = num_beams // num_beam_groups
+    beam_indices = None
+
+    beam_scores = torch.full((batch_size, num_beams), -1e9, dtype=torch.float, device=device)
+    beam_scores[:, ::num_sub_beams] = 0
+    beam_scores = beam_scores.view((batch_size * num_beams,))
 
     # extend input_ids to beam_width
-    batch_size, seqlen_og = input_ids.shape
-    input_ids = input_ids.unsqueeze(1).repeat(1, beam_width, 1)
+    input_ids = input_ids.unsqueeze(1).repeat(1, num_beams, 1).reshape(batch_size * num_beams, -1)
     if cg:
         assert fused_ft_kernel
         if not hasattr(model, '_decoding_cache'):
             model._decoding_cache = None
         model._decoding_cache = update_graph_cache(
-            model, model._decoding_cache, batch_size * beam_width, seqlen_og, max_length,
+            model, model._decoding_cache, batch_size * num_beams, seqlen_og, max_length,
             tensor_parallel=tensor_parallel
         )
         inference_params = model._decoding_cache.inference_params
         inference_params.max_sequence_len = max_length
-        inference_params.max_batch_size = batch_size * beam_width
+        inference_params.max_batch_size = batch_size * num_beams
         inference_params.sequence_len_offset = 0
     else:
-        inference_params = InferenceParams(max_sequence_len=max_length, max_batch_size=batch_size * beam_width,
+        inference_params = InferenceParams(max_sequence_len=max_length, max_batch_size=batch_size * num_beams,
                                            fused_ft_kernel=fused_ft_kernel)
-
-    beam_scores = torch.zeros((batch_size, beam_width),
-                              dtype=torch.float,
-                              device=input_ids.device)
-    beam_scores[:, 1:] = -1e9
 
     with torch.inference_mode():
         if timing:
             torch.cuda.synchronize()
             start = time.time()
-        for batch_idx in range(batch_size):
-            # inference_params.sequence_len_offset = seqlen_og - 1
-            _input_ids = input_ids[batch_idx].clone()
-            while True:
-                beam_hyps = []
-                next_indices, next_tokens, next_token_scores = run_model(model,
-                                                                         _input_ids,
-                                                                         inference_params,
-                                                                         batch_size,
-                                                                         beam_width,
-                                                                         vocab_size,
-                                                                         beam_scores,
-                                                                         )
-                next_beam_scores = torch.zeros((batch_size, beam_width),
-                                               dtype=torch.float,
-                                               device=input_ids.device)
+        cur_len = seqlen_og
 
-                for beam_token_rank, (next_token, next_score, next_index) in enumerate(
-                        zip(next_tokens[batch_idx], next_token_scores[batch_idx], next_indices[batch_idx])):
+        while True:
+            # predicted tokens in cur_len step
+            current_tokens = torch.zeros(batch_size * num_beams, dtype=input_ids.dtype, device=device)
 
-                    next_token = next_token.unsqueeze(dim=0)
-                    input_tokens = _input_ids[next_index.item()].clone()  # [seq_len]
-                    if is_ngram_blocked(input_tokens[seqlen_og:], next_token):
-                        continue
+            # indices which will form the beams in the next time step
+            reordering_indices = torch.zeros(batch_size * num_beams, dtype=torch.long, device=device)
 
-                    if len(beam_hyps) >= beam_width:
-                        break
-                    else:
-                        input_tokens = torch.concat([input_tokens, next_token], dim=0)
-                        next_beam_scores[batch_idx, len(beam_hyps)] = next_score
-                        beam_hyps.append(input_tokens)
+            model_inputs = input_ids
+            outputs = model(model_inputs, inference_params=inference_params)
+            logits = outputs[0].logits[:, -1]
 
-                try:
-                    if len(beam_hyps) < beam_width:
-                        for _ in range(beam_width - len(beam_hyps)):
-                            next_beam_scores[batch_idx, len(beam_hyps)] = next_beam_scores[batch_idx, 0]
-                            beam_hyps.append(beam_hyps[0].clone())
-                except:
-                    import ipdb
-                    ipdb.set_trace();
+            for beam_group_idx in range(num_beam_groups):
+                group_start_idx = beam_group_idx * num_sub_beams
+                group_end_idx = min(group_start_idx + num_sub_beams, num_beams)
+                group_size = group_end_idx - group_start_idx
 
-                beam_scores = next_beam_scores
-                # inference_params.sequence_len_offset += 1
-                _input_ids = torch.stack(beam_hyps, dim=0)
+                # indices of beams of current group among all sentences in batch
+                batch_group_indices = []
 
-                if _input_ids.shape[-1] > max_length:
-                    break
-                if eos_token_id is not None and (_input_ids[:, -1] == eos_token_id).all():
-                    break
+                for batch_idx in range(batch_size):
+                    batch_group_indices.extend(
+                        [batch_idx * num_beams + idx for idx in range(group_start_idx, group_end_idx)]
+                    )
+                group_input_ids = input_ids[batch_group_indices]
 
-        if timing:
-            torch.cuda.synchronize()
-            print(f'Decoding time: {(time.time() - start) * 1000:.0f}ms')
-    output_cls = GreedySearchDecoderOnlyOutput if top_k == 1 else SampleDecoderOnlyOutput
-    return output_cls(
-        sequences=torch.stack(beam_hyps, dim=0),
-        scores=beam_scores,
-    )
+                next_token_logits = logits[batch_group_indices, :]
+                vocab_size = next_token_logits.shape[-1]
+
+                next_token_scores_processed = next_token_logits   # FIXME (@seungjuh)
+                next_token_scores = next_token_scores_processed + beam_scores[batch_group_indices].unsqueeze(-1)
+                next_token_scores = next_token_scores.expand_as(next_token_scores_processed)
+
+                # reshape for beam search
+                next_token_scores = next_token_scores.view(batch_size, group_size * vocab_size)
+
+                next_token_scores, next_tokens = torch.topk(
+                    next_token_scores, 2 * group_size, dim=1, largest=True, sorted=True)
+                next_indices = torch.div(next_tokens, vocab_size, rounding_mode='floor')
+                next_tokens = next_tokens % vocab_size
+
+                # stateless
+                process_beam_indices = sum(beam_indices, ()) if beam_indices is not None else None
+                beam_outputs = beam_scorer.process(
+                    group_input_ids,
+                    next_token_scores,
+                    next_tokens,
+                    next_indices,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    beam_indices=process_beam_indices,
+                )
+                beam_scores[batch_group_indices] = beam_outputs["next_beam_scores"]
+                beam_next_tokens = beam_outputs["next_beam_tokens"]
+                beam_idx = beam_outputs["next_beam_indices"]
+
+                input_ids[batch_group_indices] = group_input_ids[beam_idx]
+                group_input_ids = torch.cat([group_input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
+                current_tokens[batch_group_indices] = group_input_ids[:, -1]
+
+                # (beam_idx // group_size) -> batch_idx
+                # (beam_idx % group_size) -> offset of idx inside the group
+                reordering_indices[batch_group_indices] = (
+                        num_beams * torch.div(beam_idx, group_size, rounding_mode="floor") + group_start_idx + (
+                            beam_idx % group_size)
+                )
+
+            input_ids = torch.cat([input_ids, current_tokens.unsqueeze(-1)], dim=-1)
+
+            cur_len += 1
+            # if beam_scorer.is_done or stopping_criteria(input_ids, None):
+            if beam_scorer.is_done or cur_len > max_length:
+                break
+
+        final_beam_indices = sum(beam_indices, ()) if beam_indices is not None else None
+        sequence_outputs = beam_scorer.finalize(
+            input_ids,
+            beam_scores,
+            next_tokens,
+            next_indices,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+            max_length=max_length,
+            beam_indices=final_beam_indices,
+        )
+        import ipdb;
+        ipdb.set_trace();
+
+
+
+
+    #     for batch_idx in range(batch_size):
+    #         _input_ids = input_ids[batch_idx].clone()
+    #         while True:
+    #             beam_hyps = []
+    #             next_indices, next_tokens, next_token_scores = run_model(model,
+    #                                                                      _input_ids,
+    #                                                                      inference_params,
+    #                                                                      batch_size,
+    #                                                                      num_beams,
+    #                                                                      vocab_size,
+    #                                                                      beam_scores,
+    #                                                                      )
+    #             next_beam_scores = torch.zeros((batch_size, num_beams),
+    #                                            dtype=torch.float,
+    #                                            device=input_ids.device)
+    #
+    #             for beam_token_rank, (next_token, next_score, next_index) in enumerate(
+    #                     zip(next_tokens[batch_idx], next_token_scores[batch_idx], next_indices[batch_idx])):
+    #
+    #                 next_token = next_token.unsqueeze(dim=0)
+    #                 input_tokens = _input_ids[next_index.item()].clone()  # [seq_len]
+    #                 if is_ngram_blocked(input_tokens[seqlen_og:], next_token):
+    #                     continue
+    #
+    #                 if len(beam_hyps) >= num_beams:
+    #                     break
+    #                 else:
+    #                     input_tokens = torch.concat([input_tokens, next_token], dim=0)
+    #                     next_beam_scores[batch_idx, len(beam_hyps)] = next_score
+    #                     beam_hyps.append(input_tokens)
+    #
+    #             try:
+    #                 if len(beam_hyps) < num_beams:
+    #                     for _ in range(num_beams - len(beam_hyps)):
+    #                         next_beam_scores[batch_idx, len(beam_hyps)] = next_beam_scores[batch_idx, 0]
+    #                         beam_hyps.append(beam_hyps[0].clone())
+    #             except:
+    #                 break
+    #
+    #             beam_scores = next_beam_scores
+    #             # inference_params.sequence_len_offset += 1
+    #             _input_ids = torch.stack(beam_hyps, dim=0)
+    #             # print(tokenizer.decode(_input_ids[0, seqlen_og:]))
+    #
+    #             if _input_ids.shape[-1] > max_length:
+    #                 break
+    #             if eos_token_id is not None and (_input_ids[:, -1] == eos_token_id).any():
+    #                 break
+    #
+    #     if timing:
+    #         torch.cuda.synchronize()
+    #         print(f'Decoding time: {(time.time() - start) * 1000:.0f}ms')
+    # output_cls = GreedySearchDecoderOnlyOutput if top_k == 1 else SampleDecoderOnlyOutput
+    # return output_cls(
+    #     sequences=_input_ids,
+    #     scores=beam_scores,
+    # )
 
 
 class GenerationMixin:
