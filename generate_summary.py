@@ -72,9 +72,9 @@ def normalize(text):
     return text
 
 
-prompt = dataset_test['chapter'][0] + ' \n What is the summary of the given text? \n '
+prompt = normalize(dataset_test['chapter'][0]) + ' \n What is the summary of the given text? \n '
 
-input_ids = torch.tensor(tokenizer.encode(normalize(prompt))).unsqueeze(0).to(device=device)
+input_ids = torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device=device)
 
 max_length = input_ids.shape[1] + args.genlen
 
