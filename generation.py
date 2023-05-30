@@ -245,7 +245,7 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
 
             cur_len += 1
             # if beam_scorer.is_done or stopping_criteria(input_ids, None):
-            if beam_scorer.is_done or cur_len > max_length:
+            if beam_scorer.is_done or cur_len >= max_length:
                 break
 
         final_beam_indices = sum(beam_indices, ()) if beam_indices is not None else None
@@ -259,10 +259,16 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
             max_length=max_length,
             beam_indices=final_beam_indices,
         )
-        import ipdb;
-        ipdb.set_trace();
+        if timing:
+            torch.cuda.synchronize()
+            print(f'Decoding time: {(time.time() - start) * 1000:.0f}ms')
+    output_cls = GreedySearchDecoderOnlyOutput if top_k == 1 else SampleDecoderOnlyOutput
+    return output_cls(
+        sequences=sequence_outputs['sequences'],
+        scores=sequence_outputs['sequence_scores'],
+    )
 
-
+    #     if timing:
 
 
     #     for batch_idx in range(batch_size):
