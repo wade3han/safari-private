@@ -10,7 +10,8 @@ from torch import Tensor, nn
 from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput
 from transformers import BeamSearchScorer
 from transformers import GPT2Tokenizer
-from transformers.generation.logits_process import LogitsProcessorList, TemperatureLogitsWarper, TopKLogitsWarper
+from transformers.generation.logits_process import LogitsProcessorList, TemperatureLogitsWarper, \
+    TopKLogitsWarper, TopPLogitsWarper
 
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
@@ -136,11 +137,14 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
     batch_size, seqlen_og = input_ids.shape
     device = input_ids.device
 
-    logits_warper = LogitsProcessorList()
+    logits_warpers = LogitsProcessorList()
     if temperature != 1.0:
-        logits_warper.append(TemperatureLogitsWarper(temperature=temperature))
-    if top_k > 0:
-        logits_warper.append(TopKLogitsWarper(k=top_k))
+        logits_warpers.append(TemperatureLogitsWarper(temperature=temperature))
+    min_tokens_to_keep = 2 if num_beams > 1 else 1
+    if top_k is not None and top_k != 0:
+        logits_warpers.append(TopKLogitsWarper(top_k=top_k, min_tokens_to_keep=min_tokens_to_keep))
+    if top_p is not None and top_p < 1.0:
+        logits_warpers.append(TopPLogitsWarper(top_p=top_p, min_tokens_to_keep=min_tokens_to_keep))
 
     beam_scorer = BeamSearchScorer(
         batch_size=batch_size,
@@ -215,7 +219,7 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
                     next_token_logits, dim=-1
                 )  # (batch_size * num_beams, vocab_size)
                 next_token_scores = next_token_scores + beam_scores[batch_group_indices].unsqueeze(-1)
-                next_token_scores = logits_warper(input_ids, next_token_scores)
+                next_token_scores = logits_warpers(input_ids, next_token_scores)
                 next_token_scores = next_token_scores.view(batch_size, group_size * vocab_size)
 
                 probs = nn.functional.softmax(next_token_scores, dim=-1)
