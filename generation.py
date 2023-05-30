@@ -215,6 +215,19 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
                 next_indices = torch.div(next_tokens, vocab_size, rounding_mode='floor')
                 next_tokens = next_tokens % vocab_size
 
+                # ngram block
+                for batch_idx in range(batch_size):
+                    for beam_token_rank, (next_token, next_index) in enumerate(
+                            zip(next_tokens[batch_idx], next_indices[batch_idx])
+                    ):
+                        batch_beam_idx = batch_idx * group_size + next_index
+                        context_tokens = group_input_ids[batch_beam_idx, :]
+                        if is_ngram_blocked(context_tokens, next_token.unsqueeze(0)):
+                            next_token_scores[batch_idx, beam_token_rank] = -1e-9
+
+                            import ipdb;
+                            ipdb.set_trace();
+
                 # stateless
                 process_beam_indices = sum(beam_indices, ()) if beam_indices is not None else None
                 beam_outputs = beam_scorer.process(
