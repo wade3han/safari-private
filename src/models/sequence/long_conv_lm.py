@@ -3,27 +3,20 @@
 import copy
 import math
 import re
+from collections import namedtuple, OrderedDict
 from functools import partial
 
-from collections import namedtuple, OrderedDict
-from collections.abc import Sequence
-
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from transformers.models.gpt2.configuration_gpt2 import GPT2Config
-
 from einops import rearrange
-
-from flash_attn.modules.mha import MHA, ParallelMHA
-from flash_attn.modules.mlp import Mlp, FusedMLP, ParallelFusedMLP
 from flash_attn.modules.block import Block
 from flash_attn.modules.embedding import GPT2Embeddings, ParallelGPT2Embeddings
-# from flash_attn.utils.generation import GenerationMixin
+from flash_attn.modules.mha import MHA, ParallelMHA
+from flash_attn.modules.mlp import Mlp, FusedMLP, ParallelFusedMLP
 from flash_attn.utils.distributed import sync_shared_params, all_gather_raw
+from flash_attn.utils.generation import GenerationMixin
 
-from generation import GenerationMixin  # Temporary
+# from generation import GenerationMixin  # Temporary
 
 try:
     from flash_attn.ops.fused_dense import ColumnParallelLinear

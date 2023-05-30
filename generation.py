@@ -7,9 +7,9 @@ from typing import Optional, Union, Sequence, Callable
 
 import torch
 from torch import Tensor, nn
-from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput
 from transformers import BeamSearchScorer
 from transformers import GPT2Tokenizer
+from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput
 from transformers.generation.logits_process import LogitsProcessorList, TemperatureLogitsWarper, \
     TopKLogitsWarper, TopPLogitsWarper
 
@@ -29,90 +29,12 @@ class InferenceParams:
     lengths_per_sample: Optional[Tensor] = None
 
 
-def torch_int_div(tensor1, tensor2):
-    """
-    A function that performs integer division across different versions of PyTorch.
-    """
-    return torch.div(tensor1, tensor2, rounding_mode="floor")
-
-
 def is_ngram_blocked(input_tokens, next_token, n=4):
     for i in range(len(input_tokens) - n + 1):
         # if the ngram is repeated, then block
         if all(input_tokens[i:i + n] == torch.cat([input_tokens[-n + 1:], next_token])):
             return True
     return False
-
-
-def modify_logits_for_top_p_filtering(logits, top_p):
-    """Set the logits for none top-p values to -inf."""
-    if top_p <= 0.0:
-        return
-    # First sort and calculate cumulative sum of probabilities.
-    sorted_logits, sorted_indices = torch.sort(logits, descending=False)
-    cumulative_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
-    # Remove tokens with cumulative top_p above the threshold (token with 0 are kept)
-    sorted_indices_to_remove = cumulative_probs <= (1 - top_p)
-    # scatter sorted tensors to original indexing
-    indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-    logits = logits.masked_fill(indices_to_remove, float('-inf'))
-
-
-def sample(logits, top_k=1, top_p=0.0, temperature=1.0):
-    """Sample from top-k logits.
-    Arguments:
-        logits: Tensor of shape (batch_size, vocab_size)
-    """
-    if top_k == 1:  # Short-circuit for greedy decoding
-        return logits.argmax(dim=-1)
-    else:
-        if top_p > 0.0:
-            assert top_p <= 1.0, 'top-p should be in (0, 1].'
-        if top_k > 0:
-            top_k = min(top_k, logits.size(-1))  # Safety check
-            logits_top, indices = torch.topk(logits, top_k, dim=-1)
-            logits_top /= temperature
-            modify_logits_for_top_p_filtering(logits_top, top_p)
-            return indices[
-                torch.arange(indices.shape[0], device=indices.device),
-                torch.multinomial(torch.softmax(logits_top, dim=-1), num_samples=1).squeeze(dim=-1)
-            ]
-        else:
-            logits_top = logits / temperature
-            modify_logits_for_top_p_filtering(logits_top, top_p)
-            return torch.multinomial(torch.softmax(logits_top, dim=-1), num_samples=1).squeeze(dim=-1)
-
-
-def run_model(model, input_ids, inference_params, batch_size, beam_width, vocab_size, beam_scores):
-    logits = model(input_ids.view(batch_size * beam_width, -1),
-                   inference_params=inference_params)[0].logits[:, -1]
-
-    if vocab_size is not None:
-        logits = logits[..., :vocab_size]
-    else:
-        vocab_size = logits.shape[-1]
-
-    # next_tokens = []
-    # for i in range(2 * beam_width):
-    #     next_tokens.append(sample(logits.reshape(batch_size, -1), top_k=50, top_p=0.9, temperature=1.0))
-    # next_tokens = torch.stack(next_tokens, dim=1)  # [batch_size, num_beams]
-    # next_token_scores = torch.zeros_like(next_tokens)
-
-    next_token_scores = torch.nn.functional.log_softmax(logits, dim=-1)  # [B * beam_width, vocab_size]
-    next_token_scores = next_token_scores + beam_scores.view(-1, 1).expand_as(next_token_scores)
-
-    # reshape
-    next_token_scores = next_token_scores.view(batch_size, beam_width * vocab_size)
-    next_token_scores, next_tokens = torch.topk(next_token_scores,
-                                                4 * beam_width,
-                                                dim=1,
-                                                largest=True,
-                                                sorted=True)
-
-    next_indices = torch.div(next_tokens, vocab_size, rounding_mode='floor')
-    next_tokens = next_tokens % vocab_size
-
-    return next_indices, next_tokens, next_token_scores
 
 
 def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
