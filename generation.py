@@ -6,10 +6,12 @@ from dataclasses import dataclass, field
 from typing import Optional, Union, Sequence, Callable
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput
 from transformers import BeamSearchScorer
 from transformers import GPT2Tokenizer
+from transformers.generation.logits_process import LogitsProcessorList, TemperatureLogitsWarper, TopKLogitsWarper
+
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
 
@@ -134,6 +136,12 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
     batch_size, seqlen_og = input_ids.shape
     device = input_ids.device
 
+    logits_warper = LogitsProcessorList()
+    if temperature != 1.0:
+        logits_warper.append(TemperatureLogitsWarper(temperature=temperature))
+    if top_k > 0:
+        logits_warper.append(TopKLogitsWarper(k=top_k))
+
     beam_scorer = BeamSearchScorer(
         batch_size=batch_size,
         num_beams=num_beams,
@@ -199,19 +207,35 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
                         [batch_idx * num_beams + idx for idx in range(group_start_idx, group_end_idx)]
                     )
                 group_input_ids = input_ids[batch_group_indices]
-
                 next_token_logits = logits[batch_group_indices, :]
                 vocab_size = next_token_logits.shape[-1]
 
-                next_token_scores_processed = next_token_logits   # FIXME (@seungjuh)
-                next_token_scores = next_token_scores_processed + beam_scores[batch_group_indices].unsqueeze(-1)
-                next_token_scores = next_token_scores.expand_as(next_token_scores_processed)
-
-                # reshape for beam search
+                # sample
+                next_token_scores = nn.functional.log_softmax(
+                    next_token_logits, dim=-1
+                )  # (batch_size * num_beams, vocab_size)
+                next_token_scores = next_token_scores + beam_scores[batch_group_indices].unsqueeze(-1)
+                next_token_scores = logits_warper(input_ids, next_token_scores)
                 next_token_scores = next_token_scores.view(batch_size, group_size * vocab_size)
 
-                next_token_scores, next_tokens = torch.topk(
-                    next_token_scores, 2 * group_size, dim=1, largest=True, sorted=True)
+                probs = nn.functional.softmax(next_token_scores, dim=-1)
+
+                next_tokens = torch.multinomial(probs, num_samples=2 * num_beams)
+                next_token_scores = torch.gather(next_token_scores, -1, next_tokens)
+
+                next_token_scores, _indices = torch.sort(next_token_scores, descending=True, dim=1)
+                next_tokens = torch.gather(next_tokens, -1, _indices)
+
+                # # beam
+                # next_token_scores_processed = next_token_logits   # FIXME (@seungjuh)
+                # next_token_scores = next_token_scores_processed + beam_scores[batch_group_indices].unsqueeze(-1)
+                # next_token_scores = next_token_scores.expand_as(next_token_scores_processed)
+                #
+                # # reshape for beam search
+                # next_token_scores = next_token_scores.view(batch_size, group_size * vocab_size)
+                # next_token_scores, next_tokens = torch.topk(
+                #     next_token_scores, 2 * group_size, dim=1, largest=True, sorted=True)
+
                 next_indices = torch.div(next_tokens, vocab_size, rounding_mode='floor')
                 next_tokens = next_tokens % vocab_size
 
@@ -248,7 +272,7 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
                 # (beam_idx % group_size) -> offset of idx inside the group
                 reordering_indices[batch_group_indices] = (
                         num_beams * torch.div(beam_idx, group_size, rounding_mode="floor") + group_start_idx + (
-                            beam_idx % group_size)
+                        beam_idx % group_size)
                 )
 
             input_ids = torch.cat([input_ids, current_tokens.unsqueeze(-1)], dim=-1)
