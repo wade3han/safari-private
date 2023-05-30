@@ -280,7 +280,6 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
                 )
 
             input_ids = torch.cat([input_ids, current_tokens.unsqueeze(-1)], dim=-1)
-            print(tokenizer.decode(input_ids[0][seqlen_og:]))
 
             cur_len += 1
             # if beam_scorer.is_done or stopping_criteria(input_ids, None):

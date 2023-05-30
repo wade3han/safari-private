@@ -63,9 +63,18 @@ for name, module in model.named_modules():
 # load prompt from booksum test set
 dataset = load_dataset('kmfoda/booksum')
 dataset_test = dataset['test']
+
+
+def normalize(text):
+    text = text.replace("\n", " ")
+    text = text.replace("\t", " ")
+    text = ' '.join(text.split())
+    return text
+
+
 prompt = dataset_test['chapter'][0] + ' \n What is the summary of the given text? \n '
 
-input_ids = torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device=device)
+input_ids = torch.tensor(tokenizer.encode(normalize(prompt))).unsqueeze(0).to(device=device)
 
 max_length = input_ids.shape[1] + args.genlen
 
