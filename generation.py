@@ -223,10 +223,7 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
                         batch_beam_idx = batch_idx * group_size + next_index
                         context_tokens = group_input_ids[batch_beam_idx, :]
                         if is_ngram_blocked(context_tokens, next_token.unsqueeze(0)):
-                            next_token_scores[batch_idx, beam_token_rank] = -1e-9
-
-                            import ipdb;
-                            ipdb.set_trace();
+                            next_token_scores[batch_idx, beam_token_rank] = -1e9
 
                 # stateless
                 process_beam_indices = sum(beam_indices, ()) if beam_indices is not None else None
@@ -255,6 +252,7 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
                 )
 
             input_ids = torch.cat([input_ids, current_tokens.unsqueeze(-1)], dim=-1)
+            print(tokenizer.decode(input_ids[0][seqlen_og:]))
 
             cur_len += 1
             # if beam_scorer.is_done or stopping_criteria(input_ids, None):
@@ -280,67 +278,6 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
         sequences=sequence_outputs['sequences'],
         scores=sequence_outputs['sequence_scores'],
     )
-
-    #     if timing:
-
-
-    #     for batch_idx in range(batch_size):
-    #         _input_ids = input_ids[batch_idx].clone()
-    #         while True:
-    #             beam_hyps = []
-    #             next_indices, next_tokens, next_token_scores = run_model(model,
-    #                                                                      _input_ids,
-    #                                                                      inference_params,
-    #                                                                      batch_size,
-    #                                                                      num_beams,
-    #                                                                      vocab_size,
-    #                                                                      beam_scores,
-    #                                                                      )
-    #             next_beam_scores = torch.zeros((batch_size, num_beams),
-    #                                            dtype=torch.float,
-    #                                            device=input_ids.device)
-    #
-    #             for beam_token_rank, (next_token, next_score, next_index) in enumerate(
-    #                     zip(next_tokens[batch_idx], next_token_scores[batch_idx], next_indices[batch_idx])):
-    #
-    #                 next_token = next_token.unsqueeze(dim=0)
-    #                 input_tokens = _input_ids[next_index.item()].clone()  # [seq_len]
-    #                 if is_ngram_blocked(input_tokens[seqlen_og:], next_token):
-    #                     continue
-    #
-    #                 if len(beam_hyps) >= num_beams:
-    #                     break
-    #                 else:
-    #                     input_tokens = torch.concat([input_tokens, next_token], dim=0)
-    #                     next_beam_scores[batch_idx, len(beam_hyps)] = next_score
-    #                     beam_hyps.append(input_tokens)
-    #
-    #             try:
-    #                 if len(beam_hyps) < num_beams:
-    #                     for _ in range(num_beams - len(beam_hyps)):
-    #                         next_beam_scores[batch_idx, len(beam_hyps)] = next_beam_scores[batch_idx, 0]
-    #                         beam_hyps.append(beam_hyps[0].clone())
-    #             except:
-    #                 break
-    #
-    #             beam_scores = next_beam_scores
-    #             # inference_params.sequence_len_offset += 1
-    #             _input_ids = torch.stack(beam_hyps, dim=0)
-    #             # print(tokenizer.decode(_input_ids[0, seqlen_og:]))
-    #
-    #             if _input_ids.shape[-1] > max_length:
-    #                 break
-    #             if eos_token_id is not None and (_input_ids[:, -1] == eos_token_id).any():
-    #                 break
-    #
-    #     if timing:
-    #         torch.cuda.synchronize()
-    #         print(f'Decoding time: {(time.time() - start) * 1000:.0f}ms')
-    # output_cls = GreedySearchDecoderOnlyOutput if top_k == 1 else SampleDecoderOnlyOutput
-    # return output_cls(
-    #     sequences=_input_ids,
-    #     scores=beam_scores,
-    # )
 
 
 class GenerationMixin:
