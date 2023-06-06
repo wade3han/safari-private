@@ -61,7 +61,9 @@ for name, module in model.named_modules():
 
 # prompt = args.prompt
 # load prompt from booksum test set
-dataset = load_dataset('kmfoda/booksum')
+# dataset = load_dataset('kmfoda/booksum')
+# dataset_test = dataset['test']
+dataset = load_dataset('scientific_papers', 'arxiv')
 dataset_test = dataset['test']
 
 
