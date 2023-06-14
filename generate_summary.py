@@ -61,8 +61,20 @@ for name, module in model.named_modules():
 
 # prompt = args.prompt
 # load prompt from booksum test set
-dataset = load_dataset('kmfoda/booksum')
+# dataset = load_dataset('kmfoda/booksum')
+# dataset_test = dataset['test']
+dataset = load_dataset('scientific_papers', 'arxiv')
 dataset_test = dataset['test']
+
+
+def normalize(text):
+    text = text.replace("\n", " ")
+    text = text.replace("\t", " ")
+    text = ' '.join(text.split())
+    return text
+
+
+prompt = normalize(dataset_test['chapter'][0]) + ' \n What is the summary of the given text? \n '
 
 def normalize(text):
     text = text.replace("\n", " ")

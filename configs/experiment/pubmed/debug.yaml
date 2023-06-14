@@ -1,0 +1,41 @@
+# @package _global_
+defaults:
+  - /pipeline: pubmed
+  - override /scheduler: cosine_warmup_timm
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  num_nodes: 1
+  accumulate_grad_batches: ${div_up:${train.global_batch_size}, ${eval:${trainer.devices} * ${loader.batch_size} * ${trainer.num_nodes}}}
+  max_epochs: 15
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  precision: bf16
+  gradient_clip_val: 1.0
+  strategy: null
+
+dataset:
+  max_length: 8192
+
+loader:
+  batch_size: 4
+
+scheduler:
+  warmup_t: 10
+
+optimizer:
+  lr: 2e-4
+  weight_decay: 0.01
+
+train:
+  gpu_mem: ${eval:"round(float(__import__('subprocess').check_output('nvidia-smi -i 0 --query-gpu=memory.total --format=csv,noheader,nounits', shell=True).strip().decode()) / 1000)"}
+  seed: 2222
+  global_batch_size: 256
+  test: True  # test after training
+
+eval:
+  log_on_step: True # don't wait to the end of the epoch to log
+
+test:
+

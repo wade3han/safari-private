@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - /experiment/booksum/base.yaml
+  - /experiment/arxiv/base.yaml
   - /model/layer: h3
 
 model:
@@ -16,7 +16,7 @@ model:
   attn_layer_idx: [6]
   attn_cfg:
     num_heads: 12
-    use_flash_attn: True
+    use_flash_attn: False
     fused_bias_fc: False
     dropout: 0.1
   fused_mlp: False
@@ -26,12 +26,3 @@ model:
 
 train:
   pretrained_model_path: /net/nfs.cirrascale/mosaic/seungjuh/H3-125M/model.pt
-
-early_stopping:
-  monitor: val_loss
-  min_delta: 0.0
-  patience: 1
-  mode: min
-
-trainer:
-  max_epochs: 2
