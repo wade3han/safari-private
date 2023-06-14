@@ -76,6 +76,14 @@ def normalize(text):
 
 prompt = normalize(dataset_test['chapter'][0]) + ' \n What is the summary of the given text? \n '
 
+def normalize(text):
+    text = text.replace("\n", " ")
+    text = text.replace("\t", " ")
+    text = ' '.join(text.split())
+    return text
+
+prompt = normalize(dataset_test['chapter'][0]) + ' \n What is the summary of the given text? \n '
+print(prompt)
 input_ids = torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device=device)
 
 max_length = input_ids.shape[1] + args.genlen
