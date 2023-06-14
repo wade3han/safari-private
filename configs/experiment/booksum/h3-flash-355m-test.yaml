@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - /experiment/booksum/h3-flash-355m.yaml
+
+train:
+  pretrained_model_path: /net/nfs.cirrascale/mosaic/seungjuh/safari-private/outputs/booksum-355M/checkpoints/last.ckpt

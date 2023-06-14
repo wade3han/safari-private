@@ -1,4 +1,4 @@
-"""Booksum dataset"""
+"""ScientificPapers dataset (ArXiv & PubMed)"""
 import logging
 import pickle
 
@@ -9,11 +9,11 @@ from torch import nn
 from datasets import DatasetDict, load_dataset
 from src.dataloaders.base import default_data_path, SequenceDataset
 
-MASK_IDX = 50255 # FIXME (@seungjuh) refer to ignore_index in cross_entropy in torch
+MASK_IDX = 50255  # EOS Token
 
 
-class BookSum(SequenceDataset):
-    _name_ = "kmfoda/booksum"
+class ScientificPapers(SequenceDataset):
+    _name_ = "scientific_papers"
 
     @property
     def init_defaults(self):
@@ -31,7 +31,7 @@ class BookSum(SequenceDataset):
 
     def prepare_data(self):
         if self.cache_dir is None:  # Just download the dataset
-            load_dataset(self._name_, cache_dir=self.data_dir)
+            load_dataset(self._name_, self.dataset_config_name, cache_dir=self.data_dir)
         else:  # Process the dataset and save it
             self.process_dataset()
 
@@ -72,13 +72,13 @@ class BookSum(SequenceDataset):
             if cache_dir.is_dir():
                 return self._load_from_cache(cache_dir)
 
-        dataset = load_dataset(self._name_, cache_dir=self.data_dir)
+        dataset = load_dataset(self._name_, self.dataset_config_name, cache_dir=self.data_dir)
         dataset = DatasetDict(train=dataset["train"],
                               validation=dataset["validation"],
                               test=dataset["test"])
 
         tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name, use_fast=True)
-
+        
         INSTRUCT = ' \n What is the summary of the given text? \n '
 
         def normalize(text):
@@ -88,14 +88,14 @@ class BookSum(SequenceDataset):
             return text
 
         def get_source(tokenizer, example):
-            input_ids = tokenizer(normalize(example['chapter']) + INSTRUCT)['input_ids']
-            target_ids = tokenizer(normalize(example['summary_text']))['input_ids']
+            input_ids = tokenizer(normalize(example['article'] + INSTRUCT))['input_ids']
+            target_ids = tokenizer(normalize(example['abstract']))['input_ids']
 
             return input_ids + target_ids[:-1]
 
         def get_target(tokenizer, example):
-            input_ids = tokenizer(normalize(example['chapter']) + INSTRUCT)['input_ids']
-            target_ids = tokenizer(normalize(example['summary_text']))['input_ids']
+            input_ids = tokenizer(normalize(example['article'] + INSTRUCT))['input_ids']
+            target_ids = tokenizer(normalize(example['abstract']))['input_ids']
             masks = [MASK_IDX] * len(input_ids)
             return masks[1:] + target_ids if not self.append_eos else masks[1:] + target_ids[:-1] + [tokenizer.eos_token_id]
 
@@ -113,7 +113,7 @@ class BookSum(SequenceDataset):
         target_tokenize = lambda example: {"label": get_target(tokenizer, example)[-max_length:]}
         dataset = dataset.map(
             target_tokenize,
-            remove_columns=["chapter", "summary_text"],
+            remove_columns=["article", "abstract"],
             keep_in_memory=True,
             load_from_cache_file=False,
             num_proc=max(self.n_workers, 1),

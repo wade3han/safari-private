@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - /experiment/booksum/base.yaml
+  - /experiment/pubmed/base.yaml
   - /model/layer: h3
 
 model:

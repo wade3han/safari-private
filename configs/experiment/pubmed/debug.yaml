@@ -1,14 +1,14 @@
 # @package _global_
 defaults:
-  - /pipeline: booksum
+  - /pipeline: pubmed
   - override /scheduler: cosine_warmup_timm
 
 trainer:
   accelerator: gpu
-  devices: 2
+  devices: 1
   num_nodes: 1
   accumulate_grad_batches: ${div_up:${train.global_batch_size}, ${eval:${trainer.devices} * ${loader.batch_size} * ${trainer.num_nodes}}}
-  max_epochs: 1
+  max_epochs: 15
   val_check_interval: 1.0
   check_val_every_n_epoch: 1
   precision: bf16
@@ -36,3 +36,6 @@ train:
 
 eval:
   log_on_step: True # don't wait to the end of the epoch to log
+
+test:
+

@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - /experiment/pubmed/h3-flash.yaml
+
+train:
+  pretrained_model_path: /net/nfs.cirrascale/mosaic/seungjuh/safari-private/outputs/pubmed-125M/checkpoints/last.ckpt
